@@ -503,6 +503,7 @@ func (m *Map) DeleteAll() error {
 //GetNextKey returns the next key in the Map after key.
 func (m *Map) GetNextKey(key MapKey, nextKey MapKey) error {
 	if err := m.Open(); err != nil {
+		fmt.Println("MK in GetNextKey Open failed with err:", err)
 		return err
 	}
 
