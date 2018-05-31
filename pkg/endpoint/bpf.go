@@ -622,18 +622,15 @@ func (e *Endpoint) regenerateBPF(owner Owner, epdir, reason string) (uint64, err
 		}
 	}()
 
-	// Create the policymap on the first pass
 	if e.PolicyMap == nil {
 		e.PolicyMap, createdPolicyMap, err = policymap.OpenMap(e.PolicyMapPathLocked())
 		if err != nil {
-			e.Mutex.Unlock()
 			return 0, err
 		}
 		// Clean up map contents
-		log.Debugf("Flushing old policies map")
+		e.getLogger().Debug("flushing old PolicyMap")
 		err = e.PolicyMap.Flush()
 		if err != nil {
-			e.Mutex.Unlock()
 			return 0, err
 		}
 	}

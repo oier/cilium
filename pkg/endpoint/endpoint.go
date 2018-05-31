@@ -2408,6 +2408,10 @@ func (e *Endpoint) InsertEvent() {
 // Must be called with e.Mutex locked.
 func (e *Endpoint) syncPolicyMap() error {
 
+	var (
+		err error
+	)
+
 	if e.realizedMapState == nil {
 		e.realizedMapState = make(map[policymap.PolicyKey]struct{})
 	}
@@ -2422,8 +2426,24 @@ func (e *Endpoint) syncPolicyMap() error {
 
 	currentMapContents, err := e.PolicyMap.DumpToSlice()
 
+	// If map is unable to be dumped, attempt to close map and open it again.
 	if err != nil {
-		return fmt.Errorf("unable to dump PolicyMap for endpoint: %s", err)
+		// Close to avoid file descriptor leaking.
+		err := e.PolicyMap.Close()
+		if err != nil {
+			return fmt.Errorf("unable to close PolicyMap which was not able to be dumped: %s", err)
+		}
+
+		e.PolicyMap, _, err = policymap.OpenMap(e.PolicyMapPathLocked())
+		if err != nil {
+			return fmt.Errorf("unable to open PolicyMap for endpoint: %s", err)
+		}
+
+		// Try to dump again, fail if error occurs.
+		currentMapContents, err = e.PolicyMap.DumpToSlice()
+		if err != nil {
+			return err
+		}
 	}
 
 	errors := []error{}
