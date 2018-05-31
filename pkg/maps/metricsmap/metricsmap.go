@@ -16,18 +16,22 @@ package metricsmap
 
 import (
 	"fmt"
-	"strconv"
-	"unsafe"
-
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/monitor"
+	"strconv"
+	"unsafe"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"io"
+	"os"
 )
 
 var log = logging.DefaultLogger
+var file *os.File
+var possible_cpus int
+var Metrics *bpf.Map
 
 const (
 	// MapName for metrics map.
@@ -40,6 +44,11 @@ const (
 	dirIngress = 1
 	dirEgress  = 2
 	dirUnknown = 0
+
+	// maxCPUs matches the buffer size for cpus.
+	// Reference bpf_num_possible_cpus from
+	// https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf.git/tree/tools/testing/selftests/bpf/bpf_util.h
+	maxCPUS = 128
 )
 
 // direction is the metrics direction i.e ingress (to an endpoint)
@@ -119,27 +128,10 @@ func (v *Value) CountFloat() float64 {
 func (k *Key) NewValue() bpf.MapValue { return &Value{} }
 
 // GetValuePtr returns the unsafe pointer to the BPF value.
-func (v *Value) GetValuePtr() unsafe.Pointer { return unsafe.Pointer(v) }
-
-var (
-	// Metrics is a mapping of all packet drops and forwards associated with
-	// the node on ingress/egress direction
-	Metrics = bpf.NewMap(
-		MapName,
-		bpf.BPF_MAP_TYPE_HASH,
-		int(unsafe.Sizeof(Key{})),
-		int(unsafe.Sizeof(Value{})),
-		MaxEntries,
-		0,
-		func(key []byte, value []byte) (bpf.MapKey, bpf.MapValue, error) {
-			k, v := Key{}, Value{}
-
-			if err := bpf.ConvertKeyValue(key, value, &k, &v); err != nil {
-				return nil, nil, err
-			}
-			return &k, &v, nil
-		})
-)
+func (v *Value) GetValuePtr() unsafe.Pointer {
+	fmt.Println("MK in GetValuePtr returning v ")
+	return unsafe.Pointer(v)
+}
 
 // updatePrometheusMetrics checks the metricsmap key value pair
 // and determines which prometheus metrics along with respective labels
@@ -173,6 +165,9 @@ func updatePrometheusMetrics(key *Key, val *Value) {
 // aggregating it into drops (by drop reason and direction) and
 // forwards (by direction) with the prometheus server.
 func SyncMetricsMap() error {
+
+	var entry [2]Value
+	fmt.Println("MK in SyncMetricsMap")
 	file := bpf.MapPath(MapName)
 	metricsmap, err := bpf.OpenMap(file)
 
@@ -183,23 +178,96 @@ func SyncMetricsMap() error {
 
 	var key, nextKey Key
 	for {
-		err := metricsmap.GetNextKey(&key, &nextKey)
+		err := bpf.GetNextKey(metricsmap.GetFd(), unsafe.Pointer(&key), unsafe.Pointer(&nextKey))
+		//err := metricsmap.GetNextKey(&key, &nextKey)
 		if err != nil {
+			fmt.Println("MK in SyncMetricsMap GetNextKey error:", err)
 			break
+		} else {
+			fmt.Println("MK in SyncMetricsMap GetNextKey SUCCESS: key:", nextKey)
 		}
-		entry, err := metricsmap.Lookup(&nextKey)
+		//entry , err := bpf.LookupElement()
+		err = bpf.LookupElement(metricsmap.GetFd(), unsafe.Pointer(&nextKey), unsafe.Pointer(&entry))
+		//entry, err := metricsmap.Lookup(&nextKey)
 		if err != nil {
 			return fmt.Errorf("unable to lookup metrics map: %s", err)
+		} else {
+			fmt.Println("MK in SyncMetricsMap LOOKUP SUCCESS key:", nextKey)
 		}
-		value := entry.(*Value)
-		// Increment Prometheus metrics here.
-		updatePrometheusMetrics(&nextKey, value)
+		value := entry
+		for i := 0; i < possible_cpus; i++ {
+			fmt.Println("MK in SyncMetricsMap LOOP Key:", nextKey)
+			fmt.Println("MK in SyncMetricsMap LOOP  v[i]:", value[i])
+			// Increment Prometheus metrics here.
+			updatePrometheusMetrics(&nextKey, (&value[i]))
+		}
 		key = nextKey
 	}
 	return nil
 }
 
+// calculate_num_cpus replicates the bpf linux helper equivalent `bpf_num_possible_cpus`
+// to find total number of possible CPUs i.e cpus that have been allocated
+// resources and can be brought online if they are present.
+// Reference bpf_num_possible_cpus from
+// https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf.git/tree/tools/testing/selftests/bpf/bpf_util.h
+func calculate_num_cpus() {
+	var start, end int
+
+	file, err := os.Open("/sys/devices/system/cpu/possible")
+	if err != nil {
+		log.WithError(err).Error("unable to open sysfs to get CPU count")
+	}
+	defer file.Close()
+
+	data := make([]byte, maxCPUS)
+	for {
+		_, err := file.Read(data)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.WithError(err).Error("unable to read sysfs to get CPU count")
+		}
+		n, err := fmt.Sscanf(string(data), "%d-%d", &start, &end)
+		if err != nil {
+			log.WithError(err).Error("unable to parse sysfs to get CPU count")
+		}
+		if n == 0 {
+			log.WithError(err).Error("Failed to retrieve # possible CPUs!")
+		} else if n == 1 {
+			end = start
+		}
+		if start == 0 {
+			possible_cpus = end + 1
+		} else {
+			possible_cpus = 0
+		}
+		break
+	}
+	fmt.Println("MK in calculate_num_cpus with possible_cpus:", possible_cpus)
+}
+
 func init() {
+	calculate_num_cpus()
+	// Metrics is a mapping of all packet drops and forwards associated with
+	// the node on ingress/egress direction
+	Metrics = bpf.NewMap(
+		MapName,
+		bpf.BPF_MAP_TYPE_PERCPU_HASH,
+		int(unsafe.Sizeof(Key{})),
+		int(unsafe.Sizeof(Value{}))*possible_cpus,
+		MaxEntries,
+		0,
+		func(key []byte, value []byte) (bpf.MapKey, bpf.MapValue, error) {
+			k, v := Key{}, Value{}
+
+			if err := bpf.ConvertKeyValue(key, value, &k, &v); err != nil {
+				return nil, nil, err
+			}
+			return &k, &v, nil
+		})
+
 	err := bpf.OpenAfterMount(Metrics)
 	if err != nil {
 		log.WithError(err).Error("unable to open metrics map")
