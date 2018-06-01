@@ -358,6 +358,10 @@ func init() {
 		"k8s-api-server", "", "Kubernetes api address server (for https use --k8s-kubeconfig-path instead)")
 	flags.StringVar(&k8sKubeConfigPath,
 		"k8s-kubeconfig-path", "", "Absolute path of the kubernetes kubeconfig file")
+	flags.BoolVar(&option.Config.K8sRequireIPv4PodCIDR,
+		option.K8sRequireIPv4PodCIDRName, false, "Require IPv4 PodCIDR to be specified in node resource")
+	flags.BoolVar(&option.Config.K8sRequireIPv6PodCIDR,
+		option.K8sRequireIPv6PodCIDRName, false, "Require IPv6 PodCIDR to be specified in node resource")
 	flags.BoolVar(&option.Config.KeepConfig,
 		"keep-config", false, "When restoring state, keeps containers' configuration in place")
 	flags.BoolVar(&option.Config.KeepTemplates,
