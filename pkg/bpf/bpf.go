@@ -22,6 +22,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"syscall"
 	"unsafe"
 
 	"github.com/cilium/cilium/pkg/logging"
@@ -158,7 +159,7 @@ func UpdateElement(fd int, key, value unsafe.Pointer, flags uint64) error {
 	)
 
 	if ret != 0 || err != 0 {
-		return fmt.Errorf("Unable to update element: %s", err)
+		return fmt.Errorf("Unable to update element for map with file descriptor %d: %s", fd, err)
 	}
 
 	return nil
@@ -181,7 +182,7 @@ func LookupElement(fd int, key, value unsafe.Pointer) error {
 	)
 
 	if ret != 0 || err != 0 {
-		return fmt.Errorf("Unable to lookup element: %s", err)
+		return fmt.Errorf("Unable to lookup element in map with file descriptor %d: %s", fd, err)
 	}
 
 	return nil
@@ -201,7 +202,7 @@ func DeleteElement(fd int, key unsafe.Pointer) error {
 	)
 
 	if ret != 0 || err != 0 {
-		return fmt.Errorf("Unable to delete element: %s", err)
+		return fmt.Errorf("Unable to delete element from map with file descriptor %d: %s", fd, err)
 	}
 
 	return nil
@@ -222,7 +223,7 @@ func GetNextKey(fd int, key, nextKey unsafe.Pointer) error {
 	)
 
 	if ret != 0 || err != 0 {
-		return fmt.Errorf("Unable to get next key: %s", err)
+		return fmt.Errorf("Unable to get next key from map with file descriptor %d: %s", fd, err)
 	}
 
 	return nil
@@ -253,7 +254,7 @@ func ObjPin(fd int, pathname string) error {
 	)
 
 	if ret != 0 || err != 0 {
-		return fmt.Errorf("Unable to pin object to %s: %s", pathname, err)
+		return fmt.Errorf("Unable to pin object with file descriptor %d to %s: %s", fd, pathname, err)
 	}
 
 	return nil
